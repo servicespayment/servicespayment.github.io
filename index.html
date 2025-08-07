@@ -2,7 +2,7 @@
 <html lang="ar">
 <head>
   <meta charset="UTF-8">
-  <title>خريطة الشركات - خدمات الدفع</title>
+  <title>خريطة شركات خدمات الدفع</title>
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <link rel="stylesheet" href="https://unpkg.com/leaflet/dist/leaflet.css" />
   <style>
@@ -17,10 +17,8 @@
   <div id="controls">
     <label for="companySelect">اختر اسم الشركة:</label>
     <select id="companySelect">
-      <option value="">-- اختر --</option>
+      <option value="">-- اختر شركة --</option>
     </select>
-
-    <input type="text" id="searchInput" placeholder="ابحث عن شركة..." />
   </div>
 
   <div id="map"></div>
@@ -28,7 +26,7 @@
   <script src="https://unpkg.com/leaflet/dist/leaflet.js"></script>
   <script src="https://unpkg.com/@turf/turf/turf.min.js"></script>
   <script>
-    const map = L.map('map').setView([31.95, 35.93], 8); // موقع تقريبي للضفة الغربية
+    const map = L.map('map').setView([31.95, 35.93], 8); // موقع تقريبي
 
     L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
       maxZoom: 19
@@ -37,53 +35,52 @@
     let allFeatures = [];
     let companyLayer;
     const companySelect = document.getElementById('companySelect');
-    const searchInput = document.getElementById('searchInput');
 
-    // تحميل ملف JSON من GitHub
-    fetch('https://servicespayment.github.io/servicespayment.json') // ← ضع رابط GitHub الصحيح هنا
+    // تحميل البيانات من GitHub
+    fetch('https://yourusername.github.io/servicespayment.json') // ← ضع رابطك الصحيح هنا
       .then(response => response.json())
       .then(data => {
         allFeatures = data.features;
 
-        // استخراج أسماء الشركات بدون تكرار
+        // تعبئة أسماء الشركات بدون تكرار
         const companyNames = [...new Set(allFeatures.map(f => f.properties.شركة))].sort();
-
-        // تعبئة القائمة المنسدلة
         companyNames.forEach(name => {
           const option = document.createElement('option');
           option.value = name;
           option.textContent = name;
           companySelect.appendChild(option);
         });
-
-        // عرض كل النقاط كبداية
-        showCompanies("");
       });
 
-    // عرض النقاط حسب اسم الشركة المحدد
-    function showCompanies(companyName) {
-      if (companyLayer) map.removeLayer(companyLayer);
+    // رسم النقاط والخطوط بعد اختيار شركة
+    function showCompanyBranches(companyName) {
+      if (companyLayer) {
+        map.eachLayer(layer => {
+          if (layer instanceof L.Polyline || layer instanceof L.CircleMarker) {
+            map.removeLayer(layer);
+          }
+        });
+      }
 
-      const filtered = companyName
-        ? allFeatures.filter(f => f.properties.شركة === companyName)
-        : allFeatures;
+      const filtered = allFeatures.filter(f => f.properties.شركة === companyName);
 
       companyLayer = L.geoJSON(filtered, {
         onEachFeature: (feature, layer) => {
           layer.bindPopup(`<b>الشركة:</b> ${feature.properties.شركة}`);
         },
         pointToLayer: (feature, latlng) => {
-          return L.circleMarker(latlng, { radius: 6, color: 'blue' });
+          return L.circleMarker(latlng, {
+            radius: 6,
+            color: 'blue'
+          });
         }
       }).addTo(map);
 
-      if (companyName) {
-        drawLinesBetweenBranches(filtered);
-        map.fitBounds(companyLayer.getBounds());
-      }
+      drawLinesBetweenBranches(filtered);
+      map.fitBounds(companyLayer.getBounds());
     }
 
-    // رسم الخطوط بين فروع الشركة وحساب المسافات
+    // رسم الخطوط بين الفروع وحساب المسافات
     function drawLinesBetweenBranches(features) {
       for (let i = 0; i < features.length; i++) {
         for (let j = i + 1; j < features.length; j++) {
@@ -92,8 +89,7 @@
 
           const from = turf.point(coord1);
           const to = turf.point(coord2);
-          const options = { units: 'kilometers' };
-          const distance = turf.distance(from, to, options).toFixed(2);
+          const distance = turf.distance(from, to, { units: 'kilometers' }).toFixed(2);
 
           const latlngs = [
             [coord1[1], coord1[0]],
@@ -106,26 +102,13 @@
       }
     }
 
-    // الحدث عند تغيير الشركة من القائمة
+    // عند اختيار شركة من القائمة
     companySelect.addEventListener('change', () => {
       const selected = companySelect.value;
-      showCompanies(selected);
-    });
-
-    // أداة البحث
-    searchInput.addEventListener('input', () => {
-      const searchTerm = searchInput.value.trim();
-      if (!searchTerm) return;
-
-      const match = [...companySelect.options].find(opt =>
-        opt.value.includes(searchTerm)
-      );
-      if (match) {
-        companySelect.value = match.value;
-        showCompanies(match.value);
+      if (selected) {
+        showCompanyBranches(selected);
       }
     });
   </script>
 </body>
 </html>
-
