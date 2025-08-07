@@ -26,21 +26,24 @@
   <script src="https://unpkg.com/leaflet/dist/leaflet.js"></script>
   <script src="https://unpkg.com/@turf/turf/turf.min.js"></script>
   <script>
-    const map = L.map('map').setView([31.95, 35.93], 8); // موقع تقريبي
+    const map = L.map('map').setView([31.95, 35.93], 8);
 
     L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
       maxZoom: 19
     }).addTo(map);
 
     let allFeatures = [];
-    let companyLayer;
+    let mainCenters = [];
+
     const companySelect = document.getElementById('companySelect');
 
-    // تحميل البيانات من GitHub
-    fetch('https://servicespayment.github.io/servicespayment.json') // ← ضع رابطك الصحيح هنا
+    fetch('https://yourusername.github.io/servicespayment.json') // ← غيّر هذا الرابط لرابط GitHub الحقيقي
       .then(response => response.json())
       .then(data => {
         allFeatures = data.features;
+
+        // أول 5 ميزات = مراكز رئيسية
+        mainCenters = allFeatures.slice(0, 5);
 
         // تعبئة أسماء الشركات بدون تكرار
         const companyNames = [...new Set(allFeatures.map(f => f.properties.شركة))].sort();
@@ -52,21 +55,63 @@
         });
       });
 
-    // رسم النقاط والخطوط بعد اختيار شركة
-    function showCompanyBranches(companyName) {
-      if (companyLayer) {
-        map.eachLayer(layer => {
-          if (layer instanceof L.Polyline || layer instanceof L.CircleMarker) {
-            map.removeLayer(layer);
-          }
-        });
-      }
+    function clearMapLayers() {
+      map.eachLayer(layer => {
+        if (layer instanceof L.Polyline || layer instanceof L.CircleMarker || layer instanceof L.GeoJSON) {
+          if (!layer._url) map.removeLayer(layer);
+        }
+      });
+    }
 
-      const filtered = allFeatures.filter(f => f.properties.شركة === companyName);
+    function showBranchesForCompany(companyName) {
+      clearMapLayers();
 
-      companyLayer = L.geoJSON(filtered, {
+      const branches = allFeatures.filter(f => f.properties.شركة === companyName);
+      const centers = mainCenters.filter(f => f.properties.شركة === companyName);
+
+      // رسم المراكز الرئيسية
+      const centerLayer = L.geoJSON(centers, {
         onEachFeature: (feature, layer) => {
-          layer.bindPopup(`<b>الشركة:</b> ${feature.properties.شركة}`);
+          const name = feature.properties.اسم_ا || 'غير معروف';
+          layer.bindPopup(`<b>مركز رئيسي:</b> ${name}<br><b>الشركة:</b> ${feature.properties.شركة}`).openPopup();
+        },
+        pointToLayer: (feature, latlng) => {
+          return L.circleMarker(latlng, {
+            radius: 8,
+            color: 'green',
+            fillColor: 'yellow',
+            fillOpacity: 0.9
+          });
+        }
+      }).addTo(map);
+
+      // رسم الفروع
+      const branchLayer = L.geoJSON(branches, {
+        onEachFeature: (feature, layer) => {
+          const name = feature.properties.اسم_ا || 'غير معروف';
+          const branchCoord = feature.geometry.coordinates;
+          let nearestDistance = null;
+
+          for (let center of centers) {
+            const centerCoord = center.geometry.coordinates;
+            if (branchCoord[0] === centerCoord[0] && branchCoord[1] === centerCoord[1]) continue;
+
+            const from = turf.point(centerCoord);
+            const to = turf.point(branchCoord);
+            const distance = turf.distance(from, to, { units: 'kilometers' });
+
+            if (nearestDistance === null || distance < nearestDistance) {
+              nearestDistance = distance;
+            }
+          }
+
+          const distanceText = nearestDistance !== null
+            ? `<br><b>المسافة إلى أقرب مركز رئيسي:</b> ${nearestDistance.toFixed(2)} كم`
+            : `<br><b>المسافة:</b> غير متوفرة`;
+
+          layer.bindPopup(
+            `<b>الفرع:</b> ${name}<br><b>الشركة:</b> ${feature.properties.شركة}${distanceText}`
+          ).openPopup();
         },
         pointToLayer: (feature, latlng) => {
           return L.circleMarker(latlng, {
@@ -76,40 +121,16 @@
         }
       }).addTo(map);
 
-      drawLinesBetweenBranches(filtered);
-      map.fitBounds(companyLayer.getBounds());
+      const group = L.featureGroup([centerLayer, branchLayer]);
+      map.fitBounds(group.getBounds());
     }
 
-    // رسم الخطوط بين الفروع وحساب المسافات
-    function drawLinesBetweenBranches(features) {
-      for (let i = 0; i < features.length; i++) {
-        for (let j = i + 1; j < features.length; j++) {
-          const coord1 = features[i].geometry.coordinates;
-          const coord2 = features[j].geometry.coordinates;
-
-          const from = turf.point(coord1);
-          const to = turf.point(coord2);
-          const distance = turf.distance(from, to, { units: 'kilometers' }).toFixed(2);
-
-          const latlngs = [
-            [coord1[1], coord1[0]],
-            [coord2[1], coord2[0]]
-          ];
-
-          L.polyline(latlngs, { color: 'red', weight: 1.5 }).addTo(map)
-            .bindPopup(`المسافة: ${distance} كم`);
-        }
-      }
-    }
-
-    // عند اختيار شركة من القائمة
     companySelect.addEventListener('change', () => {
       const selected = companySelect.value;
       if (selected) {
-        showCompanyBranches(selected);
+        showBranchesForCompany(selected);
       }
     });
   </script>
 </body>
 </html>
-
