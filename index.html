@@ -1,0 +1,171 @@
+<!DOCTYPE html>
+<html lang="ar">
+<head>
+  <meta charset="UTF-8">
+  <title>خريطة الفروع مع العناوين والمسافات</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+  <!-- Leaflet & Turf -->
+  <link rel="stylesheet" href="https://unpkg.com/leaflet/dist/leaflet.css" />
+  <script src="https://unpkg.com/leaflet/dist/leaflet.js"></script>
+  <script src="https://unpkg.com/@turf/turf/turf.min.js"></script>
+
+  <!-- XLSX Export -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+
+  <style>
+    #map { height: 85vh; }
+    .controls {
+      margin: 10px;
+    }
+    select, button {
+      margin: 5px;
+      padding: 6px;
+    }
+  </style>
+</head>
+<body>
+
+  <div class="controls">
+    <select id="companySelect" onchange="filterByCompany()">
+      <option value="">🔍 اختر اسم الشركة</option>
+    </select>
+    <button onclick="loadData()">📂 تحميل البيانات</button>
+    <button onclick="calculateSimilarBranchDistances()">📏 حساب المسافات</button>
+    <button onclick="exportToExcel()">📥 تصدير إلى Excel</button>
+  </div>
+
+  <div id="map"></div>
+
+  <script>
+    let map = L.map('map').setView([31.95, 35.9], 8);
+    let srafaraLayer, filteredLayer;
+    let allBranches = [];
+    let filteredBranches = [];
+    let distanceResults = [];
+    let lineGroup = L.layerGroup().addTo(map);
+
+    // خريطة الأساس
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+      attribution: '&copy; OpenStreetMap contributors'
+    }).addTo(map);
+
+    // تحميل البيانات
+    async function loadData() {
+      if (srafaraLayer) map.removeLayer(srafaraLayer);
+      if (filteredLayer) map.removeLayer(filteredLayer);
+      lineGroup.clearLayers();
+      allBranches = [];
+      distanceResults = [];
+      document.getElementById("companySelect").innerHTML = '<option value="">🔍 اختر اسم الشركة</option>';
+
+      const srafaraURL = 'https://srafaramallah.github.io/srafara.json'; // ← غيّره إلى رابطك الصحيح
+      const res = await fetch(srafaraURL);
+      const data = await res.json();
+
+      srafaraLayer = L.geoJSON(data, {
+        onEachFeature: function (feature, layer) {
+          const name = feature.properties["اسم_ا"];
+          const address = feature.properties["العنو"] || "بدون عنوان";
+          if (name) {
+            const coords = feature.geometry.coordinates.slice().reverse(); // lat,lng
+            allBranches.push({ name, coords, layer, address });
+          }
+        },
+        pointToLayer: (feature, latlng) => L.circleMarker(latlng, { radius: 6, color: 'gray' })
+      }).addTo(map);
+
+      // تعبئة القائمة المنسدلة
+      const uniqueNames = [...new Set(allBranches.map(b => b.name))].sort();
+      const select = document.getElementById("companySelect");
+      uniqueNames.forEach(name => {
+        const option = document.createElement("option");
+        option.value = name;
+        option.textContent = name;
+        select.appendChild(option);
+      });
+
+      alert("تم تحميل البيانات. الرجاء اختيار اسم الشركة.");
+    }
+
+    // فلترة الفروع حسب اسم الشركة
+    function filterByCompany() {
+      const selectedName = document.getElementById("companySelect").value;
+      distanceResults = [];
+      lineGroup.clearLayers();
+
+      if (filteredLayer) map.removeLayer(filteredLayer);
+      if (!selectedName) return;
+
+      filteredBranches = allBranches.filter(b => b.name === selectedName);
+
+      filteredLayer = L.layerGroup();
+      filteredBranches.forEach(b => {
+        const marker = L.circleMarker(b.coords, { radius: 6, color: 'blue' })
+          .bindPopup(`<b>${b.name}</b><br><small>${b.address}</small>`)
+          .addTo(filteredLayer);
+        b.layer = marker;
+      });
+      filteredLayer.addTo(map);
+      map.fitBounds(filteredLayer.getBounds());
+    }
+
+    // حساب المسافات وفتح جميع النوافذ (بما في ذلك الرئيسي)
+    function calculateSimilarBranchDistances() {
+      if (!filteredBranches || filteredBranches.length < 2) {
+        alert("يجب اختيار شركة تحتوي على أكثر من فرع.");
+        return;
+      }
+
+      distanceResults = [];
+      lineGroup.clearLayers();
+
+      const main = filteredBranches[Math.floor(Math.random() * filteredBranches.length)];
+      main.layer.setStyle({ color: 'red' });
+      const mainPopup = `<b>${main.name}</b><br>${main.address}<br>(فرع رئيسي)`;
+      main.layer.bindPopup(mainPopup).openPopup();
+
+      filteredBranches.forEach(branch => {
+        if (branch === main) return;
+
+        const from = turf.point([main.coords[1], main.coords[0]]);
+        const to = turf.point([branch.coords[1], branch.coords[0]]);
+        const dist = turf.distance(from, to, { units: 'kilometers' });
+        const distText = dist.toFixed(2);
+
+        distanceResults.push({
+          "الفرع الرئيسي": main.name,
+          "عنوان الرئيسي": main.address,
+          "إحداثيات الرئيسي": `${main.coords[0]}, ${main.coords[1]}`,
+          "الفرع": branch.name,
+          "عنوان الفرع": branch.address,
+          "إحداثيات الفرع": `${branch.coords[0]}, ${branch.coords[1]}`,
+          "المسافة (كم)": distText
+        });
+
+        // رسم الخط
+        L.polyline([main.coords, branch.coords], { color: 'green', weight: 2 }).addTo(lineGroup);
+
+        // Popup مع فتح تلقائي
+        const popupContent = `<b>${branch.name}</b><br>${branch.address}<br>المسافة إلى الرئيسي: ${distText} كم`;
+        branch.layer.bindPopup(popupContent).openPopup();
+      });
+
+      alert("تم حساب المسافات وفتح النوافذ لجميع الفروع.");
+    }
+
+    // تصدير النتائج إلى Excel مع العناوين
+    function exportToExcel() {
+      if (distanceResults.length === 0) {
+        alert("لا توجد نتائج لتصديرها.");
+        return;
+      }
+
+      const ws = XLSX.utils.json_to_sheet(distanceResults);
+      const wb = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(wb, ws, "المسافات");
+      XLSX.writeFile(wb, "المسافات_بين_الفروع.xlsx");
+    }
+  </script>
+</body>
+</html>
