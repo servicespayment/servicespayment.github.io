@@ -2,14 +2,17 @@
 <html lang="ar">
 <head>
   <meta charset="UTF-8">
-  <title>خريطة شركات خدمات الدفع</title>
+  <title>خريطة شركات الدفع + مسافات + تصدير</title>
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <link rel="stylesheet" href="https://unpkg.com/leaflet/dist/leaflet.css" />
   <style>
-    #map { height: 90vh; }
+    #map { height: 85vh; }
     #controls {
       padding: 10px;
       background-color: white;
+    }
+    button {
+      margin-top: 5px;
     }
   </style>
 </head>
@@ -19,12 +22,15 @@
     <select id="companySelect">
       <option value="">-- اختر شركة --</option>
     </select>
+    <br>
+    <button id="exportBtn">📁 تصدير إلى Excel</button>
   </div>
 
   <div id="map"></div>
 
   <script src="https://unpkg.com/leaflet/dist/leaflet.js"></script>
   <script src="https://unpkg.com/@turf/turf/turf.min.js"></script>
+  <script src="https://cdn.sheetjs.com/xlsx-latest/package/dist/xlsx.full.min.js"></script>
   <script>
     const map = L.map('map').setView([31.95, 35.93], 8);
 
@@ -34,18 +40,17 @@
 
     let allFeatures = [];
     let mainCenters = [];
+    let exportData = [];
 
     const companySelect = document.getElementById('companySelect');
+    const exportBtn = document.getElementById('exportBtn');
 
-    fetch('https://servicespayment.github.io/servicespayment.json') // ← غيّر هذا الرابط لرابط GitHub الحقيقي
+    fetch('https://servicespayment.github.io/servicespayment.json') // ← ضع رابط GitHub الصحيح هنا
       .then(response => response.json())
       .then(data => {
         allFeatures = data.features;
-
-        // أول 5 ميزات = مراكز رئيسية
         mainCenters = allFeatures.slice(0, 5);
 
-        // تعبئة أسماء الشركات بدون تكرار
         const companyNames = [...new Set(allFeatures.map(f => f.properties.شركة))].sort();
         companyNames.forEach(name => {
           const option = document.createElement('option');
@@ -65,11 +70,12 @@
 
     function showBranchesForCompany(companyName) {
       clearMapLayers();
+      exportData = [];
 
       const branches = allFeatures.filter(f => f.properties.شركة === companyName);
       const centers = mainCenters.filter(f => f.properties.شركة === companyName);
 
-      // رسم المراكز الرئيسية
+      // رسم المراكز
       const centerLayer = L.geoJSON(centers, {
         onEachFeature: (feature, layer) => {
           const name = feature.properties.اسم_ا || 'غير معروف';
@@ -85,33 +91,53 @@
         }
       }).addTo(map);
 
-      // رسم الفروع
+      // رسم الفروع + الخطوط
       const branchLayer = L.geoJSON(branches, {
         onEachFeature: (feature, layer) => {
-          const name = feature.properties.اسم_ا || 'غير معروف';
+          const branchName = feature.properties.اسم_ا || 'غير معروف';
           const branchCoord = feature.geometry.coordinates;
-          let nearestDistance = null;
+          let nearestCenter = null;
+          let minDistance = Infinity;
 
+          // إيجاد أقرب مركز رئيسي من نفس الشركة
           for (let center of centers) {
             const centerCoord = center.geometry.coordinates;
-            if (branchCoord[0] === centerCoord[0] && branchCoord[1] === centerCoord[1]) continue;
+            if (centerCoord[0] === branchCoord[0] && centerCoord[1] === branchCoord[1]) continue;
 
             const from = turf.point(centerCoord);
             const to = turf.point(branchCoord);
             const distance = turf.distance(from, to, { units: 'kilometers' });
 
-            if (nearestDistance === null || distance < nearestDistance) {
-              nearestDistance = distance;
+            if (distance < minDistance) {
+              minDistance = distance;
+              nearestCenter = center;
             }
           }
 
-          const distanceText = nearestDistance !== null
-            ? `<br><b>المسافة إلى أقرب مركز رئيسي:</b> ${nearestDistance.toFixed(2)} كم`
-            : `<br><b>المسافة:</b> غير متوفرة`;
+          // رسم الخط
+          if (nearestCenter) {
+            const line = L.polyline([
+              [nearestCenter.geometry.coordinates[1], nearestCenter.geometry.coordinates[0]],
+              [branchCoord[1], branchCoord[0]]
+            ], {
+              color: 'red',
+              weight: 1.5
+            }).addTo(map);
 
-          layer.bindPopup(
-            `<b>الفرع:</b> ${name}<br><b>الشركة:</b> ${feature.properties.شركة}${distanceText}`
-          ).openPopup();
+            const distanceText = `${minDistance.toFixed(2)} كم`;
+
+            layer.bindPopup(
+              `<b>الفرع:</b> ${branchName}<br><b>الشركة:</b> ${feature.properties.شركة}<br><b>المسافة لأقرب مركز:</b> ${distanceText}`
+            ).openPopup();
+
+            // تخزين بيانات للتصدير
+            exportData.push({
+              "اسم الفرع": branchName,
+              "الشركة": feature.properties.شركة,
+              "أقرب مركز رئيسي": nearestCenter.properties.اسم_ا || 'غير معروف',
+              "المسافة (كم)": minDistance.toFixed(2)
+            });
+          }
         },
         pointToLayer: (feature, latlng) => {
           return L.circleMarker(latlng, {
@@ -131,7 +157,18 @@
         showBranchesForCompany(selected);
       }
     });
+
+    // زر التصدير إلى Excel
+    exportBtn.addEventListener('click', () => {
+      if (exportData.length === 0) {
+        alert("لا توجد بيانات للتصدير");
+        return;
+      }
+      const worksheet = XLSX.utils.json_to_sheet(exportData);
+      const workbook = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(workbook, worksheet, "المسافات");
+      XLSX.writeFile(workbook, "Distances.xlsx");
+    });
   </script>
 </body>
 </html>
-
